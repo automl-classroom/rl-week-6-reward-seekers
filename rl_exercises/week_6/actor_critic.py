@@ -6,8 +6,11 @@ Adds GAE for low-variance advantage estimation.
 
 from typing import Any, List, Tuple
 
+import os
+
 import gymnasium as gym
 import hydra
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -163,15 +166,24 @@ class ActorCriticAgent(AbstractAgent):
             Discounted returns.
         """
         # TODO: convert rewards into discounted returns
+        returns = self.compute_returns(rewards)
 
         # TODO: convert states list into a torch batch and compute state-values
 
+        state_tensors = torch.stack([torch.from_numpy(s).float() for s in states])
+
+        with torch.no_grad():
+            values = self.value_fn(state_tensors)
         # TODO: compute raw advantages = returns - values
+        advantages = returns - values
 
         # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
 
         # return normalized advantages and returns
-        return None
+        return advantages, returns
 
     def compute_gae(
         self,
@@ -203,18 +215,37 @@ class ActorCriticAgent(AbstractAgent):
         """
 
         # TODO: compute values and next_values using your value_fn
+        states_tensor = torch.stack([torch.from_numpy(s).float() for s in states])
+        next_states_tensor = torch.stack(
+            [torch.from_numpy(s).float() for s in next_states]
+        )
 
+        with torch.no_grad():
+            values = self.value_fn(states_tensor)
+            next_values = self.value_fn(next_states_tensor)
         # TODO: compute deltas: one-step TD errors
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
+        dones_tensor = torch.tensor(dones, dtype=torch.float32)
+        # TD error
+        deltas = rewards_tensor + self.gamma * next_values * (1 - dones_tensor) - values
 
         # TODO: accumulate GAE advantages backwards
+        advantages = torch.zeros_like(rewards_tensor)
+        gae = 0.0
+        for t in reversed(range(len(rewards))):
+            gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones_tensor[t]) * gae
+            advantages[t] = gae
 
         # TODO: compute returns using advantages and values
+        returns = advantages + values
 
         # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
 
         # TODO: advantages, returns  # replace with actual values (detach both to avoid re-entering the graph)
-
-        return None
+        return advantages.detach(), returns.detach()
 
     def update_agent(
         self,
@@ -250,13 +281,19 @@ class ActorCriticAgent(AbstractAgent):
             ret = self.compute_returns(list(rewards))
 
             # TODO: compute advantages by subtracting running return
-            adv = ...
+            adv = ret - self.running_return
 
             # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
             # (Reminder, use unbiased=False for torch tensors)
+            adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
 
             # TODO: update running return using baseline decay
             # (x = baseline_decay * x + (1 - baseline_decay) * mean return)
+            self.running_return = (
+                self.baseline_decay * self.running_return
+                + (1 - self.baseline_decay) * ret.mean()
+            )
+
         else:
             ret = self.compute_returns(list(rewards))
             adv = (ret - ret.mean()) / (ret.std(unbiased=False) + 1e-8)
@@ -322,6 +359,38 @@ class ActorCriticAgent(AbstractAgent):
         self.policy.train()
         return float(np.mean(returns)), float(np.std(returns))
 
+    def plot_performance(self, save_path="performance_plot.png", show_plot=False):
+        train_steps, train_returns = zip(*self.training_returns)
+        eval_steps, eval_returns = (
+            zip(*self.eval_returns) if self.eval_returns else ([], [])
+        )
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_steps, train_returns, label="Train Return", alpha=0.7)
+        if eval_steps:
+            plt.plot(
+                eval_steps,
+                eval_returns,
+                label="Eval Return",
+                linestyle="--",
+                marker="o",
+            )
+        plt.xlabel("Environment Steps")
+        plt.ylabel("Return")
+        plt.title("Training and Evaluation Returns")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
+        print(f"Plot saved to {save_path}")
+
+        if show_plot:
+            plt.show()
+
+    plt.close()
+
     def train(
         self,
         total_steps: int,
@@ -343,6 +412,9 @@ class ActorCriticAgent(AbstractAgent):
         eval_env = gym.make(self.env.spec.id)
         step_count = 0
 
+        self.training_returns = []
+        self.eval_returns = []
+
         while step_count < total_steps:
             state, _ = self.env.reset()
             done = False
@@ -360,17 +432,20 @@ class ActorCriticAgent(AbstractAgent):
 
                 if step_count % eval_interval == 0:
                     mean_r, std_r = self.evaluate(eval_env, num_episodes=eval_episodes)
+                    self.eval_returns.append((step_count, mean_r))
                     print(
                         f"[Eval ] Step {step_count:6d} AvgReturn {mean_r:5.1f} ± {std_r:4.1f}"
                     )
 
             policy_loss, value_loss = self.update_agent(trajectory)
             total_return = sum(r for _, _, r, *_ in trajectory)
+            self.training_returns.append((step_count, total_return))
             print(
                 f"[Train] Step {step_count:6d} Return {total_return:5.1f} Policy Loss {policy_loss:.3f} Value Loss {value_loss:.3f}"
             )
 
         print("Training complete.")
+        self.plot_performance()
 
 
 @hydra.main(
