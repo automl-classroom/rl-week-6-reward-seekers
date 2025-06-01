@@ -172,8 +172,7 @@ class ActorCriticAgent(AbstractAgent):
 
         state_tensors = torch.stack([torch.from_numpy(s).float() for s in states])
 
-        with torch.no_grad():
-            values = self.value_fn(state_tensors)
+        values = self.value_fn(state_tensors)
         # TODO: compute raw advantages = returns - values
         advantages = returns - values
 
@@ -220,9 +219,8 @@ class ActorCriticAgent(AbstractAgent):
             [torch.from_numpy(s).float() for s in next_states]
         )
 
-        with torch.no_grad():
-            values = self.value_fn(states_tensor)
-            next_values = self.value_fn(next_states_tensor)
+        values = self.value_fn(states_tensor)
+        next_values = self.value_fn(next_states_tensor)
         # TODO: compute deltas: one-step TD errors
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
         dones_tensor = torch.tensor(dones, dtype=torch.float32)
