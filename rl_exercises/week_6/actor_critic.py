@@ -148,15 +148,41 @@ class ActorCriticAgent(AbstractAgent):
     def compute_advantages(
         self, states: List[np.ndarray], rewards: List[float]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        returns = self.compute_returns(rewards)
-        states_tensor = torch.stack([torch.from_numpy(s).float() for s in states])
-        with torch.no_grad():
-            values = self.value_fn(states_tensor)
+        """
+        Compute advantages using a learned value function.
 
+        Parameters
+        ----------
+        states : list of np.ndarray
+            States encountered during the trajectory.
+        rewards : list of float
+            Rewards collected during the episode.
+
+        Returns
+        -------
+        advantages : torch.Tensor
+            Advantage values for each timestep.
+        returns : torch.Tensor
+            Discounted returns.
+        """
+        # TODO: convert rewards into discounted returns
+        returns = self.compute_returns(rewards)
+
+        # TODO: convert states list into a torch batch and compute state-values
+
+        state_tensors = torch.stack([torch.from_numpy(s).float() for s in states])
+
+        with torch.no_grad():
+            values = self.value_fn(state_tensors)
+        # TODO: compute raw advantages = returns - values
         advantages = returns - values
+
+        # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
         advantages = (advantages - advantages.mean()) / (
             advantages.std(unbiased=False) + 1e-8
         )
+
+        # return normalized advantages and returns
         return advantages, returns
 
     def compute_gae(
@@ -166,6 +192,29 @@ class ActorCriticAgent(AbstractAgent):
         next_states: List[np.ndarray],
         dones: List[bool],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute Generalized Advantage Estimation (GAE).
+
+        Parameters
+        ----------
+        states : list of np.ndarray
+            Current states.
+        rewards : list of float
+            Rewards received after taking actions.
+        next_states : list of np.ndarray
+            Next states observed after actions.
+        dones : list of bool
+            Whether the episode terminated at each step.
+
+        Returns
+        -------
+        advantages : torch.Tensor
+            GAE advantages for each timestep.
+        returns : torch.Tensor
+            Target returns for training the critic.
+        """
+
+        # TODO: compute values and next_values using your value_fn
         states_tensor = torch.stack([torch.from_numpy(s).float() for s in states])
         next_states_tensor = torch.stack(
             [torch.from_numpy(s).float() for s in next_states]
@@ -174,23 +223,28 @@ class ActorCriticAgent(AbstractAgent):
         with torch.no_grad():
             values = self.value_fn(states_tensor)
             next_values = self.value_fn(next_states_tensor)
+        # TODO: compute deltas: one-step TD errors
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
+        dones_tensor = torch.tensor(dones, dtype=torch.float32)
+        # TD error
+        deltas = rewards_tensor + self.gamma * next_values * (1 - dones_tensor) - values
 
-        deltas = (
-            torch.tensor(rewards)
-            + self.gamma * next_values * (1 - torch.tensor(dones, dtype=torch.float32))
-            - values
-        )
-
-        advantages = torch.zeros_like(deltas)
+        # TODO: accumulate GAE advantages backwards
+        advantages = torch.zeros_like(rewards_tensor)
         gae = 0.0
-        for t in reversed(range(len(deltas))):
-            gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
+        for t in reversed(range(len(rewards))):
+            gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones_tensor[t]) * gae
             advantages[t] = gae
 
+        # TODO: compute returns using advantages and values
         returns = advantages + values
+
+        # TODO: normalize advantages to zero mean and unit variance and use 1e-8 for numerical stability
         advantages = (advantages - advantages.mean()) / (
             advantages.std(unbiased=False) + 1e-8
         )
+
+        # TODO: advantages, returns  # replace with actual values (detach both to avoid re-entering the graph)
         return advantages.detach(), returns.detach()
 
     def update_agent(
